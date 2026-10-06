@@ -40,6 +40,12 @@ st.markdown("""
     .hl-green { background-color: #d1e7dd; padding: 2px 4px; border-radius: 3px; color: #000; }
     .hl-red { background-color: #f8d7da; padding: 2px 4px; border-radius: 3px; color: #000; }
     
+    /* Класс для сохранения переносов строк по Shift + Enter */
+    .book-text-content {
+        white-space: pre-wrap; 
+        line-height: 1.6;      
+    }
+
     button[aria-label="Collapse sidebar"]::after {
         content: " { Спрятать";
         font-weight: bold;
@@ -314,7 +320,8 @@ if st.session_state.auth_mode is not None and st.session_state.auth_mode != "pro
                     
             with col_text:
                 st.subheader("📝 Конспект и правила:")
-                st.markdown(p_text, unsafe_allow_html=True)
+                # ВОТ ЗДЕСЬ ИЗМЕНЕНО: текст обернут в класс для сохранения Shift + Enter
+                st.markdown(f'<div class="book-text-content">{p_text}</div>', unsafe_allow_html=True)
                         
             st.markdown('</div></div>', unsafe_allow_html=True)
     
