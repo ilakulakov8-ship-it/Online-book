@@ -1,7 +1,5 @@
 import streamlit as st
-from supabase import create_client, Client
-import io
-from PIL import Image
+import requests
 
 # --- НАСТРОЙКА СТРАНИЦЫ И СТИЛЕЙ ---
 st.set_page_config(page_title="Правила 5-11 класс", page_icon="📐", layout="wide")
@@ -57,19 +55,57 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- ПОДКЛЮЧЕНИЕ К SUPABASE ЧЕРЕЗ ОФИЦИАЛЬНЫЙ КЛИЕНТ ---
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
+# --- ПОДКЛЮЧЕНИЕ К SUPABASE ЧЕРЕЗ REST API ---
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("⚠️ Не найдены ключи Supabase в `st.secrets`! Проверьте настройки на Streamlit Cloud.")
     st.stop()
 
-@st.cache_resource
-def init_supabase() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+}
 
-supabase = init_supabase()
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДБ И СТОРАДЖА ---
+def db_get(table, query_params=""):
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{query_params}"
+    res = requests.get(url, headers=HEADERS, timeout=20)
+    res.raise_for_status()
+    return res.json()
+
+def db_post(table, data):
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    res = requests.post(url, headers=HEADERS, json=data, timeout=20)
+    res.raise_for_status()
+    return res.json()
+
+def db_patch(table, query_params, data):
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{query_params}"
+    res = requests.patch(url, headers=HEADERS, json=data, timeout=20)
+    res.raise_for_status()
+    return res.json()
+
+def db_delete(table, query_params):
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{query_params}"
+    res = requests.delete(url, headers=HEADERS, timeout=20)
+    res.raise_for_status()
+    return res.json()
+
+def storage_upload(bucket, file_path, file_bytes, file_mime="image/jpeg"):
+    url = f"{SUPABASE_URL}/storage/v1/object/{bucket}/{file_path}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": file_mime,
+        "x-upsert": "true"
+    }
+    res = requests.post(url, headers=headers, data=file_bytes, timeout=30)
+    res.raise_for_status()
+    return f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{file_path}"
 
 # --- СЕКРЕТНЫЙ ПАРОЛЬ АДМИНИСТРАТОРА ---
 ADMIN_PASSWORD = "$8157#@G05pl"
@@ -125,11 +161,10 @@ if st.session_state.auth_mode == "prompt_admin":
 
 is_admin = (st.session_state.auth_mode == "admin")
 
-# Получаем все страницы через клиент Supabase
+# Получаем все страницы через REST
 all_pages = []
 try:
-    response = supabase.table("pages").select("*").order("id", desc=False).execute()
-    all_pages = response.data
+    all_pages = db_get("pages", "order=id.asc")
 except Exception as e:
     st.exception(e)
     st.stop()
@@ -185,27 +220,22 @@ with st.sidebar:
             
             if st.button("💾 Опубликовать страницу в книгу", type="primary"):
                 if rule_title:
-                    insert_res = supabase.table("pages").insert({
+                    insert_res = db_post("pages", {
                         "page_number": next_page_num,
                         "grade": grade,
                         "title": rule_title,
                         "text_content": rule_text
-                    }).execute()
+                    })
                     
-                    if insert_res.data and uploaded_files:
-                        new_page_id = insert_res.data[0]["id"]
+                    if insert_res and uploaded_files:
+                        new_page_id = insert_res[0]["id"]
                         for idx, f in enumerate(uploaded_files):
                             file_path = f"page_{new_page_id}_{idx}_{f.name}"
-                            supabase.storage.from_("book-images").upload(
-                                path=file_path,
-                                file=f.getvalue(),
-                                file_options={"content-type": f.type, "x-upsert": "true"}
-                            )
-                            img_url = supabase.storage.from_("book-images").get_public_url(file_path)
-                            supabase.table("page_images").insert({
+                            img_url = storage_upload("book-images", file_path, f.getvalue(), f.type)
+                            db_post("page_images", {
                                 "page_id": new_page_id,
                                 "image_url": img_url
-                            }).execute()
+                            })
                             
                     st.success(f"Страница №{next_page_num} сохранена в облако!")
                     st.rerun()
@@ -227,31 +257,26 @@ with st.sidebar:
             edit_text = st.text_area("Подзаголовок / Описание (формулы, правила, текст):", value=p_text, height=200, key="edit_text")
             
             if st.button("🔄 Сохранить изменения", type="primary"):
-                supabase.table("pages").update({
+                db_patch("pages", f"id=eq.{current_page_id}", {
                     "grade": edit_grade,
                     "title": edit_title,
                     "text_content": edit_text
-                }).eq("id", current_page_id).execute()
+                })
                 
                 if delete_old_photos:
                     try:
-                        supabase.table("page_images").delete().eq("page_id", current_page_id).execute()
+                        db_delete("page_images", f"page_id=eq.{current_page_id}")
                     except Exception:
                         pass
                 
                 if edit_files:
                     for idx, f in enumerate(edit_files):
                         file_path = f"page_{current_page_id}_edit_{idx}_{f.name}"
-                        supabase.storage.from_("book-images").upload(
-                            path=file_path,
-                            file=f.getvalue(),
-                            file_options={"content-type": f.type, "x-upsert": "true"}
-                        )
-                        img_url = supabase.storage.from_("book-images").get_public_url(file_path)
-                        supabase.table("page_images").insert({
+                        img_url = storage_upload("book-images", file_path, f.getvalue(), f.type)
+                        db_post("page_images", {
                             "page_id": current_page_id,
                             "image_url": img_url
-                        }).execute()
+                        })
                 
                 st.success("Изменения успешно сохранены!")
                 st.rerun()
@@ -282,10 +307,10 @@ def confirm_delete_dialog(p_id, title, page_num):
     with col_del:
         if st.button("Удалить", type="primary", use_container_width=True):
             try:
-                supabase.table("page_images").delete().eq("page_id", p_id).execute()
+                db_delete("page_images", f"page_id=eq.{p_id}")
             except Exception:
                 pass
-            supabase.table("pages").delete().eq("id", p_id).execute()
+            db_delete("pages", f"id=eq.{p_id}")
             st.toast("Страница успешно удалена!")
             st.session_state.current_page = 1
             st.rerun()
@@ -307,8 +332,7 @@ if st.session_state.auth_mode is not None and st.session_state.auth_mode != "pro
         if current_page_id is not None:
             images_records = []
             try:
-                img_res = supabase.table("page_images").select("*").eq("page_id", current_page_id).execute()
-                images_records = img_res.data
+                images_records = db_get("page_images", f"page_id=eq.{current_page_id}")
             except Exception:
                 pass
     
