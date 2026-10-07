@@ -127,6 +127,14 @@ if st.session_state.auth_mode == "prompt_admin":
 # Определяем статус админа для отрисовки элементов
 is_admin = (st.session_state.auth_mode == "admin")
 
+all_pages = []
+try:
+    response = supabase.table("pages").select("*").order("id", desc=False).execute()
+    all_pages = response.data if response.data else []
+except Exception as e:
+    st.exception(e)  # Покажет настоящую ошибку прямо на экране
+    st.stop()
+
 total_rules_pages = len(all_pages)
 max_pages = 1 + total_rules_pages
 
