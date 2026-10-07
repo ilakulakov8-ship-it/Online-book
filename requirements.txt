@@ -1,3 +1,7 @@
 streamlit
-supabase
+supabase==2.3.0
+postgrest==0.16.8
+realtime==1.0.0
+storage3==0.7.0
+gotrue==2.5.0
 pillow
