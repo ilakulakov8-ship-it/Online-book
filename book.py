@@ -66,12 +66,10 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("⚠️ Не найдены ключи Supabase в `st.secrets`! Проверьте настройки на Streamlit Cloud.")
     st.stop()
 
-# Инициализация с таймаутом для стабильной работы сети в облаке
-supabase: Client = create_client(
-    SUPABASE_URL, 
-    SUPABASE_KEY, 
-    options=ClientOptions(postgrest_client_timeout=10)
-)
+# Инициализация с таймаутом
+opts = ClientOptions()
+opts.postgrest_client_timeout = 20
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY, options=opts)
 
 # --- СЕКРЕТНЫЙ ПАРОЛЬ АДМИНИСТРАТОРА ---
 ADMIN_PASSWORD = "$8157#@G05pl"
@@ -129,9 +127,13 @@ if st.session_state.auth_mode == "prompt_admin":
 # Определяем статус админа для отрисовки элементов
 is_admin = (st.session_state.auth_mode == "admin")
 
-# --- ПОЛУЧЕНИЕ ДАННЫХ ИЗ SUPABASE ---
-response = supabase.table("pages").select("*").order("id", desc=False).execute()
-all_pages = response.data if response.data else []
+# --- ПОЛУЧЕНИЕ ДАННЫХ ИЗ SUPABASE (С ЗАЩИТОЙ ОТ СЕТЕВЫХ СБОЕВ) ---
+all_pages = []
+try:
+    response = supabase.table("pages").select("*").order("id", desc=False).execute()
+    all_pages = response.data if response.data else []
+except Exception as e:
+    st.warning("⚠️ Не удалось загрузить данные из базы (сетевой сбой). Проверьте соединение или перезагрузите страницу.")
 
 total_rules_pages = len(all_pages)
 max_pages = 1 + total_rules_pages
@@ -185,7 +187,6 @@ with st.sidebar:
             
             if st.button("💾 Опубликовать страницу в книгу", type="primary"):
                 if rule_title:
-                    # 1. Сохраняем страницу в таблицу pages
                     insert_res = supabase.table("pages").insert({
                         "page_number": next_page_num,
                         "grade": grade,
@@ -195,8 +196,6 @@ with st.sidebar:
                     
                     if insert_res.data:
                         new_page_id = insert_res.data[0]["id"]
-                        
-                        # 2. Загружаем картинки в Supabase Storage и сохраняем ссылки
                         if uploaded_files:
                             for idx, f in enumerate(uploaded_files):
                                 file_path = f"page_{new_page_id}_{idx}_{f.name}"
@@ -304,8 +303,12 @@ if st.session_state.auth_mode is not None and st.session_state.auth_mode != "pro
     
     else:
         if current_page_id is not None:
-            img_res = supabase.table("page_images").select("image_url").eq("page_id", current_page_id).execute()
-            images_records = img_res.data if img_res.data else []
+            images_records = []
+            try:
+                img_res = supabase.table("page_images").select("image_url").eq("page_id", current_page_id).execute()
+                images_records = img_res.data if img_res.data else []
+            except Exception:
+                pass
     
             st.markdown('<div class="rule-card-container">', unsafe_allow_html=True)
             
