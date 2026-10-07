@@ -1,6 +1,5 @@
 import streamlit as st
 from supabase import create_client, Client
-from supabase.client import ClientOptions
 import io
 from PIL import Image
 
@@ -41,10 +40,10 @@ st.markdown("""
     .hl-green { background-color: #d1e7dd; padding: 2px 4px; border-radius: 3px; color: #000; }
     .hl-red { background-color: #f8d7da; padding: 2px 4px; border-radius: 3px; color: #000; }
     
-    /* Класс для сохранения переносов строк по Shift + Enter */
     .book-text-content {
         white-space: pre-wrap; 
         line-height: 1.6;      
+        font-size: 1.05rem;
     }
 
     button[aria-label="Collapse sidebar"]::after {
@@ -58,7 +57,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- ПОДКЛЮЧЕНИЕ К SUPABASE ---
+# --- ПОДКЛЮЧЕНИЕ К SUPABASE ЧЕРЕЗ ОФИЦИАЛЬНЫЙ КЛИЕНТ ---
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
 
@@ -66,19 +65,19 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("⚠️ Не найдены ключи Supabase в `st.secrets`! Проверьте настройки на Streamlit Cloud.")
     st.stop()
 
-# Инициализация с таймаутом
-opts = ClientOptions()
-opts.postgrest_client_timeout = 20
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY, options=opts)
+@st.cache_resource
+def init_supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = init_supabase()
 
 # --- СЕКРЕТНЫЙ ПАРОЛЬ АДМИНИСТРАТОРА ---
 ADMIN_PASSWORD = "$8157#@G05pl"
 
-# Инициализируем состояние сессии для авторизации
 if "auth_mode" not in st.session_state:
-    st.session_state.auth_mode = None  # Варианты: None, "guest", "admin"
+    st.session_state.auth_mode = None
 
-# --- ГЛАВНОЕ СТАРТОВОЕ МЕНЮ (ЕСЛИ РЕЖИМ НЕ ВЫБРАН) ---
+# --- ГЛАВНОЕ СТАРТОВОЕ МЕНЮ ---
 if st.session_state.auth_mode is None:
     st.markdown("<br><br>", unsafe_allow_html=True)
     col_l, col_m, col_r = st.columns([0.2, 0.6, 0.2])
@@ -124,15 +123,15 @@ if st.session_state.auth_mode == "prompt_admin":
                     st.error("Неверный пароль доступа!")
     st.stop()
 
-# Определяем статус админа для отрисовки элементов
 is_admin = (st.session_state.auth_mode == "admin")
 
+# Получаем все страницы через клиент Supabase
 all_pages = []
 try:
     response = supabase.table("pages").select("*").order("id", desc=False).execute()
-    all_pages = response.data if response.data else []
+    all_pages = response.data
 except Exception as e:
-    st.exception(e)  # Покажет настоящую ошибку прямо на экране
+    st.exception(e)
     st.stop()
 
 total_rules_pages = len(all_pages)
@@ -144,7 +143,6 @@ if "current_page" not in st.session_state:
 if st.session_state.current_page > max_pages:
     st.session_state.current_page = max_pages
 
-# Загружаем текущие данные для отображения и изменения
 current_page_id = None
 p_title, p_grade, p_text = "", "", ""
 if st.session_state.current_page > 1:
@@ -181,9 +179,9 @@ with st.sidebar:
             st.info(f"Будет создана страница № {next_page_num}")
             
             grade = st.selectbox("Выберите класс:", [f"{i} класс" for i in range(5, 12)])
-            rule_title = st.text_input("Название правила/темы:")
-            uploaded_files = st.file_uploader("Загрузите фото (можно несколько):", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
-            rule_text = st.text_area("Текст правила / Заметки:")
+            rule_title = st.text_input("Название темы:")
+            uploaded_files = st.file_uploader("Загрузить фото (необязательно):", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
+            rule_text = st.text_area("Подзаголовок / Описание (формулы, правила, текст):", height=200)
             
             if st.button("💾 Опубликовать страницу в книгу", type="primary"):
                 if rule_title:
@@ -194,23 +192,21 @@ with st.sidebar:
                         "text_content": rule_text
                     }).execute()
                     
-                    if insert_res.data:
+                    if insert_res.data and uploaded_files:
                         new_page_id = insert_res.data[0]["id"]
-                        if uploaded_files:
-                            for idx, f in enumerate(uploaded_files):
-                                file_path = f"page_{new_page_id}_{idx}_{f.name}"
-                                supabase.storage.from_("book-images").upload(
-                                    file_path, 
-                                    f.getvalue(), 
-                                    file_options={"upsert": "true"}
-                                )
-                                img_url = supabase.storage.from_("book-images").get_public_url(file_path)
-                                
-                                supabase.table("page_images").insert({
-                                    "page_id": new_page_id,
-                                    "image_url": img_url
-                                }).execute()
-                    
+                        for idx, f in enumerate(uploaded_files):
+                            file_path = f"page_{new_page_id}_{idx}_{f.name}"
+                            supabase.storage.from_("book-images").upload(
+                                path=file_path,
+                                file=f.getvalue(),
+                                file_options={"content-type": f.type, "x-upsert": "true"}
+                            )
+                            img_url = supabase.storage.from_("book-images").get_public_url(file_path)
+                            supabase.table("page_images").insert({
+                                "page_id": new_page_id,
+                                "image_url": img_url
+                            }).execute()
+                            
                     st.success(f"Страница №{next_page_num} сохранена в облако!")
                     st.rerun()
                 else:
@@ -224,11 +220,11 @@ with st.sidebar:
             
             edit_grade = st.selectbox("Класс:", classes_list, index=default_class_index, key="edit_grade")
             edit_title = st.text_input("Название темы:", value=p_title, key="edit_title")
-            edit_text = st.text_area("Текст и конспект:", value=p_text, key="edit_text")
             
-            st.write("🖼️ Изменение фотографий:")
-            delete_old_photos = st.checkbox("🗑️ Удалить старые фото перед загрузкой новых", key="del_old_photos")
-            edit_files = st.file_uploader("Добавить новые фото к этой теме:", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="edit_files")
+            delete_old_photos = st.checkbox("🗑️ Заменить старые фото новыми", key="del_old_photos")
+            edit_files = st.file_uploader("Добавить фото:", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="edit_files")
+            
+            edit_text = st.text_area("Подзаголовок / Описание (формулы, правила, текст):", value=p_text, height=200, key="edit_text")
             
             if st.button("🔄 Сохранить изменения", type="primary"):
                 supabase.table("pages").update({
@@ -238,15 +234,18 @@ with st.sidebar:
                 }).eq("id", current_page_id).execute()
                 
                 if delete_old_photos:
-                    supabase.table("page_images").delete().eq("page_id", current_page_id).execute()
+                    try:
+                        supabase.table("page_images").delete().eq("page_id", current_page_id).execute()
+                    except Exception:
+                        pass
                 
                 if edit_files:
                     for idx, f in enumerate(edit_files):
                         file_path = f"page_{current_page_id}_edit_{idx}_{f.name}"
                         supabase.storage.from_("book-images").upload(
-                            file_path, 
-                            f.getvalue(), 
-                            file_options={"upsert": "true"}
+                            path=file_path,
+                            file=f.getvalue(),
+                            file_options={"content-type": f.type, "x-upsert": "true"}
                         )
                         img_url = supabase.storage.from_("book-images").get_public_url(file_path)
                         supabase.table("page_images").insert({
@@ -258,7 +257,7 @@ with st.sidebar:
                 st.rerun()
 
         st.write("---")
-        st.write("🎨 Цветные маркеры:")
+        st.write("🎨 Цветные маркеры (вставлять в текст):")
         c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("🟡"): st.code('<span class="hl-yellow">текст</span>')
@@ -269,7 +268,7 @@ with st.sidebar:
     else:
         st.info("📖 Книга открыта в режиме 'Только просмотр' для учителя.")
 
-# --- ФУНКЦИЯ ДИАЛОГОВОГО ОКНА УДАЛЕНИЯ ---
+# --- ДИАЛОГОВОЕ ОКНО УДАЛЕНИЯ ---
 @st.dialog("⚠️ Подтверждение удаления")
 def confirm_delete_dialog(p_id, title, page_num):
     st.write(f"Вы точно хотите удалить страницу **№ {page_num}**?")
@@ -282,8 +281,11 @@ def confirm_delete_dialog(p_id, title, page_num):
             st.rerun()
     with col_del:
         if st.button("Удалить", type="primary", use_container_width=True):
+            try:
+                supabase.table("page_images").delete().eq("page_id", p_id).execute()
+            except Exception:
+                pass
             supabase.table("pages").delete().eq("id", p_id).execute()
-            supabase.table("page_images").delete().eq("page_id", p_id).execute()
             st.toast("Страница успешно удалена!")
             st.session_state.current_page = 1
             st.rerun()
@@ -305,8 +307,8 @@ if st.session_state.auth_mode is not None and st.session_state.auth_mode != "pro
         if current_page_id is not None:
             images_records = []
             try:
-                img_res = supabase.table("page_images").select("image_url").eq("page_id", current_page_id).execute()
-                images_records = img_res.data if img_res.data else []
+                img_res = supabase.table("page_images").select("*").eq("page_id", current_page_id).execute()
+                images_records = img_res.data
             except Exception:
                 pass
     
@@ -330,20 +332,19 @@ if st.session_state.auth_mode is not None and st.session_state.auth_mode != "pro
     
             st.markdown('<div class="rule-card">', unsafe_allow_html=True)
             
-            col_content, col_text = st.columns(2)
-            
-            with col_content:
-                if images_records:
-                    st.subheader("📸 Снимки классной работы:")
+            if images_records:
+                col_media, col_text = st.columns([1, 1])
+                with col_media:
+                    st.subheader("📸 Иллюстрации / Фото:")
                     for img_row in images_records:
                         img_url = img_row.get("image_url")
                         if img_url:
                             st.image(img_url, use_container_width=True)
-                else:
-                    st.info("Для этой страницы изображения не загружались.")
-                    
-            with col_text:
-                st.subheader("📝 Конспект и правила:")
+                with col_text:
+                    st.subheader("📌 Подзаголовок / Описание (формулы, правила):")
+                    st.markdown(f'<div class="book-text-content">{p_text}</div>', unsafe_allow_html=True)
+            else:
+                st.subheader("📌 Подзаголовок / Описание (формулы, правила):")
                 st.markdown(f'<div class="book-text-content">{p_text}</div>', unsafe_allow_html=True)
                         
             st.markdown('</div></div>', unsafe_allow_html=True)
