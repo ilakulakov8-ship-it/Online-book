@@ -1,5 +1,5 @@
 import streamlit as st
-import sqlite3
+from supabase import create_client, Client
 import io
 from PIL import Image
 
@@ -57,28 +57,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- БАЗА ДАННЫХ ---
-conn = sqlite3.connect("algebra_book.db", check_same_thread=False)
-cursor = conn.cursor()
+# --- ПОДКЛЮЧЕНИЕ К SUPABASE ---
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
 
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS pages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        page_number INTEGER,
-        grade TEXT,
-        title TEXT,
-        text_content TEXT
-    )
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS page_images (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        page_id INTEGER,
-        image_bytes BLOB,
-        FOREIGN KEY(page_id) REFERENCES pages(id) ON DELETE CASCADE
-    )
-""")
-conn.commit()
+if not SUPABASE_URL or not SUPABASE_KEY:
+    st.error("⚠️ Не найдены ключи Supabase в `st.secrets`! Проверьте настройки на Streamlit Cloud.")
+    st.stop()
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- СЕКРЕТНЫЙ ПАРОЛЬ АДМИНИСТРАТОРА ---
 ADMIN_PASSWORD = "$8157#@G05pl"
@@ -136,9 +123,11 @@ if st.session_state.auth_mode == "prompt_admin":
 # Определяем статус админа для отрисовки элементов
 is_admin = (st.session_state.auth_mode == "admin")
 
-# --- ПОДГОТОВКА ДАННЫХ И СЧЕТЧИКОВ СТРАНИЦ ---
-cursor.execute("SELECT COUNT(*) FROM pages")
-total_rules_pages = cursor.fetchone()[0]
+# --- ПОЛУЧЕНИЕ ДАННЫХ ИЗ SUPABASE ---
+response = supabase.table("pages").select("*").order("id", desc=False).execute()
+all_pages = response.data if response.data else []
+
+total_rules_pages = len(all_pages)
 max_pages = 1 + total_rules_pages
 
 if "current_page" not in st.session_state:
@@ -152,10 +141,12 @@ current_page_id = None
 p_title, p_grade, p_text = "", "", ""
 if st.session_state.current_page > 1:
     db_page_idx = st.session_state.current_page - 2
-    cursor.execute("SELECT id, page_number, grade, title, text_content FROM pages ORDER BY id ASC")
-    all_pages = cursor.fetchall()
     if db_page_idx < len(all_pages):
-        current_page_id, p_num, p_grade, p_title, p_text = all_pages[db_page_idx]
+        page_item = all_pages[db_page_idx]
+        current_page_id = page_item["id"]
+        p_grade = page_item.get("grade", "")
+        p_title = page_item.get("title", "")
+        p_text = page_item.get("text_content", "")
 
 # --- БОКОВАЯ ПАНЕЛЬ (АДМИНКА) ---
 with st.sidebar:
@@ -185,21 +176,37 @@ with st.sidebar:
             rule_title = st.text_input("Название правила/темы:")
             uploaded_files = st.file_uploader("Загрузите фото (можно несколько):", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
             rule_text = st.text_area("Текст правила / Заметки:")
+            
             if st.button("💾 Опубликовать страницу в книгу", type="primary"):
                 if rule_title:
-                    cursor.execute(
-                        "INSERT INTO pages (page_number, grade, title, text_content) VALUES (?, ?, ?, ?)",
-                        (next_page_num, grade, rule_title, rule_text)
-                    )
-                    page_id = cursor.lastrowid
+                    # 1. Сохраняем страницу в таблицу pages
+                    insert_res = supabase.table("pages").insert({
+                        "page_number": next_page_num,
+                        "grade": grade,
+                        "title": rule_title,
+                        "text_content": rule_text
+                    }).execute()
                     
-                    if uploaded_files:
-                        for f in uploaded_files:
-                            img_blob = f.getvalue()
-                            cursor.execute("INSERT INTO page_images (page_id, image_bytes) VALUES (?, ?)", (page_id, img_blob))
+                    if insert_res.data:
+                        new_page_id = insert_res.data[0]["id"]
+                        
+                        # 2. Загружаем картинки в Supabase Storage и сохраняем ссылки
+                        if uploaded_files:
+                            for idx, f in enumerate(uploaded_files):
+                                file_path = f"page_{new_page_id}_{idx}_{f.name}"
+                                supabase.storage.from_("book-images").upload(
+                                    file_path, 
+                                    f.getvalue(), 
+                                    file_options={"upsert": "true"}
+                                )
+                                img_url = supabase.storage.from_("book-images").get_public_url(file_path)
+                                
+                                supabase.table("page_images").insert({
+                                    "page_id": new_page_id,
+                                    "image_url": img_url
+                                }).execute()
                     
-                    conn.commit()
-                    st.success(f"Страница №{next_page_num} сохранена!")
+                    st.success(f"Страница №{next_page_num} сохранена в облако!")
                     st.rerun()
                 else:
                     st.error("Введите название темы!")
@@ -219,20 +226,29 @@ with st.sidebar:
             edit_files = st.file_uploader("Добавить новые фото к этой теме:", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="edit_files")
             
             if st.button("🔄 Сохранить изменения", type="primary"):
-                cursor.execute(
-                    "UPDATE pages SET grade = ?, title = ?, text_content = ? WHERE id = ?",
-                    (edit_grade, edit_title, edit_text, current_page_id)
-                )
+                supabase.table("pages").update({
+                    "grade": edit_grade,
+                    "title": edit_title,
+                    "text_content": edit_text
+                }).eq("id", current_page_id).execute()
                 
                 if delete_old_photos:
-                    cursor.execute("DELETE FROM page_images WHERE page_id = ?", (current_page_id,))
+                    supabase.table("page_images").delete().eq("page_id", current_page_id).execute()
                 
                 if edit_files:
-                    for f in edit_files:
-                        img_blob = f.getvalue()
-                        cursor.execute("INSERT INTO page_images (page_id, image_bytes) VALUES (?, ?)", (current_page_id, img_blob))
+                    for idx, f in enumerate(edit_files):
+                        file_path = f"page_{current_page_id}_edit_{idx}_{f.name}"
+                        supabase.storage.from_("book-images").upload(
+                            file_path, 
+                            f.getvalue(), 
+                            file_options={"upsert": "true"}
+                        )
+                        img_url = supabase.storage.from_("book-images").get_public_url(file_path)
+                        supabase.table("page_images").insert({
+                            "page_id": current_page_id,
+                            "image_url": img_url
+                        }).execute()
                 
-                conn.commit()
                 st.success("Изменения успешно сохранены!")
                 st.rerun()
 
@@ -261,9 +277,8 @@ def confirm_delete_dialog(p_id, title, page_num):
             st.rerun()
     with col_del:
         if st.button("Удалить", type="primary", use_container_width=True):
-            cursor.execute("DELETE FROM pages WHERE id = ?", (p_id,))
-            cursor.execute("DELETE FROM page_images WHERE page_id = ?", (p_id,))
-            conn.commit()
+            supabase.table("pages").delete().eq("id", p_id).execute()
+            supabase.table("page_images").delete().eq("page_id", p_id).execute()
             st.toast("Страница успешно удалена!")
             st.session_state.current_page = 1
             st.rerun()
@@ -283,8 +298,8 @@ if st.session_state.auth_mode is not None and st.session_state.auth_mode != "pro
     
     else:
         if current_page_id is not None:
-            cursor.execute("SELECT image_bytes FROM page_images WHERE page_id = ?", (current_page_id,))
-            images_records = cursor.fetchall()
+            img_res = supabase.table("page_images").select("image_url").eq("page_id", current_page_id).execute()
+            images_records = img_res.data if img_res.data else []
     
             st.markdown('<div class="rule-card-container">', unsafe_allow_html=True)
             
@@ -312,15 +327,14 @@ if st.session_state.auth_mode is not None and st.session_state.auth_mode != "pro
                 if images_records:
                     st.subheader("📸 Снимки классной работы:")
                     for img_row in images_records:
-                        img_bytes = img_row[0]
-                        image = Image.open(io.BytesIO(img_bytes))
-                        st.image(image, use_container_width=True)
+                        img_url = img_row.get("image_url")
+                        if img_url:
+                            st.image(img_url, use_container_width=True)
                 else:
                     st.info("Для этой страницы изображения не загружались.")
                     
             with col_text:
                 st.subheader("📝 Конспект и правила:")
-                # ВОТ ЗДЕСЬ ИЗМЕНЕНО: текст обернут в класс для сохранения Shift + Enter
                 st.markdown(f'<div class="book-text-content">{p_text}</div>', unsafe_allow_html=True)
                         
             st.markdown('</div></div>', unsafe_allow_html=True)
