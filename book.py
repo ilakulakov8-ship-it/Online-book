@@ -1,5 +1,6 @@
 import streamlit as st
 from supabase import create_client, Client
+from supabase.client import ClientOptions
 import io
 from PIL import Image
 
@@ -65,7 +66,12 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("⚠️ Не найдены ключи Supabase в `st.secrets`! Проверьте настройки на Streamlit Cloud.")
     st.stop()
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Инициализация с таймаутом для стабильной работы сети в облаке
+supabase: Client = create_client(
+    SUPABASE_URL, 
+    SUPABASE_KEY, 
+    options=ClientOptions(postgrest_client_timeout=10)
+)
 
 # --- СЕКРЕТНЫЙ ПАРОЛЬ АДМИНИСТРАТОРА ---
 ADMIN_PASSWORD = "$8157#@G05pl"
