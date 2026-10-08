@@ -391,6 +391,15 @@ with st.sidebar:
             if st.button("🟢", key="marker_green"): st.code('<span class="hl-green">текст</span>')
         with c3:
             if st.button("🔴", key="marker_red"): st.code('<span class="hl-red">текст</span>')
+
+        st.write("SUP 📐 Степень (тег):")
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            if st.button("x²", key="deg_sq"): st.code('<sup>2</sup>')
+        with s2:
+            if st.button("x³", key="deg_cb"): st.code('<sup>3</sup>')
+        with s3:
+            if st.button("xⁿ", key="deg_n"): st.code('<sup>n</sup>')
     else:
         st.info("📖 Режим просмотра учебника.")
 
