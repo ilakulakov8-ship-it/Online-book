@@ -261,6 +261,22 @@ if st.session_state.current_page > 1:
         p_title = page_item.get("title", "")
         p_text = page_item.get("text_content", "")
 
+# --- ДИАЛОГ УДАЛЕНИЯ ---
+@st.dialog("⚠️ Подтверждение удаления")
+def confirm_delete_dialog(p_id, title, page_num):
+    st.write(f"Удалить страницу **№ {page_num}** ({title})?")
+    col_c, col_d = st.columns(2)
+    with col_c:
+        if st.button("Отмена", key="dlg_cancel_btn"): st.rerun()
+    with col_d:
+        if st.button("Удалить", type="primary", key="dlg_delete_btn"):
+            try: db_delete("page_images", f"page_id=eq.{p_id}")
+            except Exception: pass
+            db_delete("pages", f"id=eq.{p_id}")
+            st.toast("Страница удалена!")
+            st.session_state.current_page = 1
+            st.rerun()
+
 # --- БОКОВАЯ ПАНЕЛЬ ---
 with st.sidebar:
     if st.button("🔙 К выбору учебников", use_container_width=True, type="secondary"):
@@ -289,7 +305,7 @@ with st.sidebar:
     
     if is_admin:
         st.success("🔓 Режим редактирования")
-        if st.button("🚪 Выйти из аккаунта", use_container_width=True):
+        if st.button("🚪 Выйти из аккаунта", use_container_width=True, key="sidebar_logout_btn"):
             st.session_state.auth_mode = None
             st.session_state.selected_book_id = None
             st.rerun()
@@ -311,12 +327,12 @@ with st.sidebar:
         if menu_mode == "➕ Создать страницу":
             st.subheader("➕ Новая страница")
             next_page_num = total_rules_pages + 2
-            grade = st.selectbox("Класс:", available_grades)
-            rule_title = st.text_input("Название темы:")
-            uploaded_files = st.file_uploader("Фото (необязательно):", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
-            rule_text = st.text_area("Описание / Формулы:", height=200)
+            grade = st.selectbox("Класс:", available_grades, key="create_grade_select")
+            rule_title = st.text_input("Название темы:", key="create_title_input")
+            uploaded_files = st.file_uploader("Фото (необязательно):", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="create_files_upload")
+            rule_text = st.text_area("Описание / Формулы:", height=200, key="create_text_area")
             
-            if st.button("💾 Сохранить страницу", type="primary"):
+            if st.button("💾 Сохранить страницу", type="primary", key="create_save_btn"):
                 if rule_title:
                     insert_res = db_post("pages", {
                         "book_id": current_book["id"],
@@ -339,13 +355,13 @@ with st.sidebar:
             st.subheader(f"✏️ Правка стр. № {st.session_state.current_page}")
             default_class_index = available_grades.index(p_grade) if p_grade in available_grades else 0
             
-            edit_grade = st.selectbox("Класс:", available_grades, index=default_class_index, key="edit_grade")
-            edit_title = st.text_input("Тема:", value=p_title, key="edit_title")
-            delete_old_photos = st.checkbox("🗑️ Заменить старые фото новыми", key="del_old_photos")
-            edit_files = st.file_uploader("Добавить фото:", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="edit_files")
-            edit_text = st.text_area("Описание:", value=p_text, height=200, key="edit_text")
+            edit_grade = st.selectbox("Класс:", available_grades, index=default_class_index, key="edit_grade_select")
+            edit_title = st.text_input("Тема:", value=p_title, key="edit_title_input")
+            delete_old_photos = st.checkbox("🗑️ Заменить старые фото новыми", key="del_old_photos_check")
+            edit_files = st.file_uploader("Добавить фото:", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="edit_files_upload")
+            edit_text = st.text_area("Описание:", value=p_text, height=200, key="edit_text_area")
             
-            if st.button("🔄 Обновить", type="primary"):
+            if st.button("🔄 Обновить", type="primary", key="edit_update_btn"):
                 db_patch("pages", f"id=eq.{current_page_id}", {
                     "grade": edit_grade, "title": edit_title, "text_content": edit_text
                 })
@@ -361,34 +377,22 @@ with st.sidebar:
                 
                 st.success("Изменения сохранены!")
                 st.rerun()
+                
+            st.write("---")
+            if st.button("🗑️ Удалить эту страницу", type="primary", use_container_width=True, key="trigger_delete_btn"):
+                confirm_delete_dialog(current_page_id, p_title, st.session_state.current_page)
         
         st.write("---")
         st.write("🎨 Цветные маркеры:")
         c1, c2, c3 = st.columns(3)
         with c1:
-            if st.button("🟡"): st.code('<span class="hl-yellow">текст</span>')
+            if st.button("🟡", key="marker_yellow"): st.code('<span class="hl-yellow">текст</span>')
         with c2:
-            if st.button("🟢"): st.code('<span class="hl-green">текст</span>')
+            if st.button("🟢", key="marker_green"): st.code('<span class="hl-green">текст</span>')
         with c3:
-            if st.button("🔴"): st.code('<span class="hl-red">текст</span>')
+            if st.button("🔴", key="marker_red"): st.code('<span class="hl-red">текст</span>')
     else:
         st.info("📖 Режим просмотра учебника.")
-
-# --- ДИАЛОГ УДАЛЕНИЯ ---
-@st.dialog("⚠️ Подтверждение удаления")
-def confirm_delete_dialog(p_id, title, page_num):
-    st.write(f"Удалить страницу **№ {page_num}** ({title})?")
-    col_c, col_d = st.columns(2)
-    with col_c:
-        if st.button("Отмена"): st.rerun()
-    with col_d:
-        if st.button("Удалить", type="primary"):
-            try: db_delete("page_images", f"page_id=eq.{p_id}")
-            except Exception: pass
-            db_delete("pages", f"id=eq.{p_id}")
-            st.toast("Страница удалена!")
-            st.session_state.current_page = 1
-            st.rerun()
 
 # --- ОТОБРАЖЕНИЕ ОБЛОЖКИ ИЛИ СТРАНИЦ ---
 if st.session_state.current_page == 1:
@@ -412,7 +416,6 @@ else:
 
         st.markdown('<div class="rule-card-container">', unsafe_allow_html=True)
         
-        # Кнопка с карандашом полностью удалена, остался только заголовок и метаинформация
         st.caption(f"📚 {current_book['title']} | {p_grade} | Стр: {st.session_state.current_page}")
         st.header(p_title)
 
@@ -440,31 +443,28 @@ st.markdown(f"<center><h4>Страница <b>{st.session_state.current_page}</b
 
 nav_back_cols = st.columns(4)
 with nav_back_cols[0]:
-    if st.button("⏮️ -25", disabled=(st.session_state.current_page - 25 < 1), key="b25"):
+    if st.button("⏮️ -25", disabled=(st.session_state.current_page - 25 < 1), key="nav_b25"):
         st.session_state.current_page -= 25; st.rerun()
 with nav_back_cols[1]:
-    if st.button("⏪ -5", disabled=(st.session_state.current_page - 5 < 1), key="b5"):
+    if st.button("⏪ -5", disabled=(st.session_state.current_page - 5 < 1), key="nav_b5"):
         st.session_state.current_page -= 5; st.rerun()
 with nav_back_cols[2]:
-    if st.button("◀️ -2", disabled=(st.session_state.current_page - 2 < 1), key="b2"):
+    if st.button("◀️ -2", disabled=(st.session_state.current_page - 2 < 1), key="nav_b2"):
         st.session_state.current_page -= 2; st.rerun()
 with nav_back_cols[3]:
-    if st.button(f"⬅️ Назад", disabled=(st.session_state.current_page - 1 < 1), key="b1"):
+    if st.button(f"⬅️ Назад", disabled=(st.session_state.current_page - 1 < 1), key="nav_b1"):
         st.session_state.current_page -= 1; st.rerun()
 
 nav_forward_cols = st.columns(4)
 with nav_forward_cols[0]:
-    if st.button("Вперед +1 ➡️", disabled=(st.session_state.current_page + 1 > max_pages), key="f1"):
+    if st.button("Вперед +1 ➡️", disabled=(st.session_state.current_page + 1 > max_pages), key="nav_f1"):
         st.session_state.current_page += 1; st.rerun()
 with nav_forward_cols[1]:
-    if st.button("Вперед +2 ▶️", disabled=(st.session_state.current_page + 2 > max_pages), key="f2"):
+    if st.button("Вперед +2 ▶️", disabled=(st.session_state.current_page + 2 > max_pages), key="nav_f2"):
         st.session_state.current_page += 2; st.rerun()
 with nav_forward_cols[2]:
-    if st.button("Вперед +5 ⏩", disabled=(st.session_state.current_page + 5 > max_pages), key="f5"):
+    if st.button("Вперед +5 ⏩", disabled=(st.session_state.current_page + 5 > max_pages), key="nav_f5"):
         st.session_state.current_page += 5; st.rerun()
 with nav_forward_cols[3]:
-    if st.button("Вперед +25 ⏭️", disabled=(st.session_state.current_page + 25 > max_pages), key="f25"):
-        st.session_state.current_page += 25; st.rerun()
-with nav_forward_cols[3]:
-    if st.button("Вперед +25 ⏭️", disabled=(st.session_state.current_page + 25 > max_pages), key="f25"):
+    if st.button("Вперед +25 ⏭️", disabled=(st.session_state.current_page + 25 > max_pages), key="nav_f25"):
         st.session_state.current_page += 25; st.rerun()
