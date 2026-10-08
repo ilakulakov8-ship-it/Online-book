@@ -73,9 +73,14 @@ HEADERS = {
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДБ И СТОРАДЖА ---
 def db_get(table, query_params=""):
     url = f"{SUPABASE_URL}/rest/v1/{table}?{query_params}"
-    res = requests.get(url, headers=HEADERS, timeout=20)
-    res.raise_for_status()
-    return res.json()
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=20)
+        if res.status_code == 204 or not res.text.strip():
+            return []
+        res.raise_for_status()
+        return res.json()
+    except Exception:
+        return []
 
 def db_post(table, data):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
