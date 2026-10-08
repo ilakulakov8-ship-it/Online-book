@@ -1,6 +1,5 @@
 import streamlit as st
 import requests
-from google import genai
 
 # --- НАСТРОЙКА СТРАНИЦЫ И СТИЛЕЙ ---
 st.set_page_config(page_title="Онлайн-библиотека учебников", page_icon="📚", layout="wide")
@@ -46,10 +45,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- ПОДКЛЮЧЕНИЕ К SUPABASE И GEMINI ЧЕРЕЗ СЕКРЕТЫ ---
+# --- ПОДКЛЮЧЕНИЕ К SUPABASE ЧЕРЕЗ REST API ---
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("⚠️ Не найдены ключи Supabase в `st.secrets`! Проверьте настройки на Streamlit Cloud.")
@@ -61,13 +59,6 @@ HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "return=representation"
 }
-
-gemini_client = None
-if GEMINI_API_KEY:
-    try:
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-    except Exception:
-        pass
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДБ И СТОРАДЖА ---
 def db_get(table, query_params=""):
@@ -111,7 +102,9 @@ def storage_upload(bucket, file_path, file_bytes, file_mime="image/jpeg"):
     res.raise_for_status()
     return f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{file_path}"
 
+# --- ВЫНЕСЕННАЯ ПОВТОРЯЮЩАЯСЯ ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ КАРТИНОК ---
 def upload_and_save_images(book_id, page_id, files):
+    """Загружает список файлов в Supabase Storage и сохраняет их ссылки в БД."""
     for idx, f in enumerate(files):
         file_path = f"book_{book_id}_page_{page_id}_{idx}_{f.name}"
         img_url = storage_upload("book-images", file_path, f.getvalue(), f.type)
@@ -278,21 +271,18 @@ with st.sidebar:
     st.write("---")
     
     # --- БЫСТРЫЙ ВЫБОР КЛАССА ---
-    st.subheader("🎯 Выбрать класс")
+    st.subheader("🎯 Переход по классам")
     available_grades = [f"{i} класс" for i in range(5, 12)]
-    
-    # Кнопки для быстрого переключения по классам
-    selected_grade_filter = st.selectbox("Фильтр по классам:", ["Все классы"] + available_grades)
+    selected_grade_filter = st.selectbox("Выберите класс:", ["Все классы"] + available_grades)
     
     if selected_grade_filter != "Все классы":
-        # Находим первую страницу выбранного класса
         found_idx = next((i for i, p in enumerate(all_pages) if p.get("grade") == selected_grade_filter), None)
         if found_idx is not None:
             if st.button(f"Перейти к {selected_grade_filter}", type="primary", use_container_width=True):
-                st.session_state.current_page = found_idx + 2  # +2 из-за обложки на 1 странице
+                st.session_state.current_page = found_idx + 2  # +2 из-за обложки
                 st.rerun()
         else:
-            st.caption(f"В этом учебнике пока нет тем для {selected_grade_filter}")
+            st.caption(f"В этом учебнике нет тем для {selected_grade_filter}")
 
     st.write("---")
     if is_admin:
@@ -445,46 +435,6 @@ else:
             st.subheader("📌 Подзаголовок / Описание (формулы, правила):")
             st.markdown(f'<div class="book-text-content">{p_text}</div>', unsafe_allow_html=True)
                     
-        # --- ИИ-ПОМОЩНИК ---
-        st.write("---")
-        st.markdown("#### 🤖 Спросить у ИИ-помощника")
-        
-        ai_input_key = f"ai_query_{current_page_id}"
-        user_ai_question = st.text_input(
-            "Напишите что непонятно", 
-            placeholder="Напишите что непонятно (например: объясни эту формулу проще или как решать примеры)...", 
-            key=ai_input_key
-        )
-        
-        if st.button("Спросить у ИИ", key=f"ai_btn_{current_page_id}"):
-            if not user_ai_question.strip():
-                st.warning("Пожалуйста, введите вопрос!")
-            elif not gemini_client:
-                st.error("⚠️ Ключ GEMINI_API_KEY не настроен в секретах Streamlit!")
-            else:
-                with st.spinner("ИИ думает над ответом..."):
-                    try:
-                        prompt = f"""
-                        Ты дружелюбный ИИ-репетитор для школьника по предмету '{current_book['title']}'.
-                        Контекст текущей темы:
-                        Класс: {p_grade}
-                        Тема: {p_title}
-                        Текст правила/теории:
-                        {p_text}
-
-                        Вопрос ученика: {user_ai_question}
-
-                        Объясни понятным языком, приведи пример и ответь на вопрос на основе этой темы.
-                        """
-                        response = gemini_client.models.generate_content(
-                            model='gemini-2.5-flash',
-                            contents=prompt
-                        )
-                        st.success("Ответ ИИ:")
-                        st.write(response.text)
-                    except Exception as e:
-                        st.error(f"Произошла ошибка при обращении к ИИ: {e}")
-
         st.markdown('</div></div>', unsafe_allow_html=True)
 
 # --- НАВИГАЦИЯ ПО СТРАНИЦАМ ---
