@@ -120,6 +120,8 @@ if "selected_book_id" not in st.session_state:
     st.session_state.selected_book_id = None
 if "current_page" not in st.session_state:
     st.session_state.current_page = 1
+if "admin_action" not in st.session_state:
+    st.session_state.admin_action = "➕ Создать страницу"
 
 # --- ЭКРАН 1: ВЫБОР РЕЖИМА ВХОДА ---
 if st.session_state.auth_mode is None:
@@ -259,7 +261,7 @@ if st.session_state.current_page > 1:
         p_title = page_item.get("title", "")
         p_text = page_item.get("text_content", "")
 
-# --- БОКОВАЯ ПАНЕЛЬ С КНОПКАМИ ПО КЛАССАМ В СТОЛБИК ---
+# --- БОКОВАЯ ПАНЕЛЬ ---
 with st.sidebar:
     if st.button("🔙 К выбору учебников", use_container_width=True, type="secondary"):
         st.session_state.selected_book_id = None
@@ -268,24 +270,17 @@ with st.sidebar:
         
     st.write("---")
     
-    # --- БЛОК «ОТКРЫТЬ МАТЕРИАЛ» ПО КЛАССАМ (5-11 В СТОЛБИК) ---
     st.subheader("📖 Открыть материал:")
-    
     available_grades_list = [f"За {i} класс" for i in range(5, 12)]
     
     for grade_label in available_grades_list:
-        # Извлекаем название для базы данных, например: "5 класс" из "За 5 класс"
         db_grade_name = grade_label.replace("За ", "")
-        
-        # Проверяем, есть ли хотя бы одна страница этого класса в учебнике
         has_pages_for_grade = any(p.get("grade") == db_grade_name for p in all_pages)
         
-        # Рисуем кнопку в столбик
         if st.button(grade_label, key=f"sidebar_grade_btn_{db_grade_name}", use_container_width=True):
             if has_pages_for_grade:
-                # Находим первую страницу этого класса
                 found_idx = next(i for i, p in enumerate(all_pages) if p.get("grade") == db_grade_name)
-                st.session_state.current_page = found_idx + 2  # +2 из-за обложки на 1 странице
+                st.session_state.current_page = found_idx + 2
                 st.rerun()
             else:
                 st.toast(f"В этом учебнике пока нет материалов за {db_grade_name}!", icon="ℹ️")
@@ -301,12 +296,17 @@ with st.sidebar:
             
         st.write("---")
         available_grades = [f"{i} класс" for i in range(5, 12)]
+        
+        radio_options = ["➕ Создать страницу", "✏️ Редактировать текущую"]
+        default_radio_idx = 0 if st.session_state.admin_action not in radio_options else radio_options.index(st.session_state.admin_action)
+        
         menu_mode = st.radio(
             "Действие:", 
-            ["➕ Создать страницу", "✏️ Редактировать текущую"], 
-            disabled=(st.session_state.current_page == 1),
-            key="admin_menu_mode"
+            radio_options, 
+            index=default_radio_idx,
+            disabled=(st.session_state.current_page == 1)
         )
+        st.session_state.admin_action = menu_mode
         
         if menu_mode == "➕ Создать страницу":
             st.subheader("➕ Новая страница")
@@ -411,21 +411,10 @@ else:
             pass
 
         st.markdown('<div class="rule-card-container">', unsafe_allow_html=True)
-        if is_admin:
-            c_head, c_edit, c_del = st.columns([0.8, 0.1, 0.1])
-            with c_head:
-                st.caption(f"📚 {current_book['title']} | {p_grade} | Стр: {st.session_state.current_page}")
-                st.header(p_title)
-            with c_edit:
-                if st.button("✏️"):
-                    st.session_state.admin_menu_mode = "✏️ Редактировать текущую"
-                    st.rerun()
-            with c_del:
-                if st.button("🗑️"):
-                    confirm_delete_dialog(current_page_id, p_title, st.session_state.current_page)
-        else:
-            st.caption(f"📚 {current_book['title']} | {p_grade} | Стр: {st.session_state.current_page}")
-            st.header(p_title)
+        
+        # Кнопка с карандашом полностью удалена, остался только заголовок и метаинформация
+        st.caption(f"📚 {current_book['title']} | {p_grade} | Стр: {st.session_state.current_page}")
+        st.header(p_title)
 
         st.markdown('<div class="rule-card">', unsafe_allow_html=True)
         if images_records:
@@ -473,6 +462,9 @@ with nav_forward_cols[1]:
 with nav_forward_cols[2]:
     if st.button("Вперед +5 ⏩", disabled=(st.session_state.current_page + 5 > max_pages), key="f5"):
         st.session_state.current_page += 5; st.rerun()
+with nav_forward_cols[3]:
+    if st.button("Вперед +25 ⏭️", disabled=(st.session_state.current_page + 25 > max_pages), key="f25"):
+        st.session_state.current_page += 25; st.rerun()
 with nav_forward_cols[3]:
     if st.button("Вперед +25 ⏭️", disabled=(st.session_state.current_page + 25 > max_pages), key="f25"):
         st.session_state.current_page += 25; st.rerun()
