@@ -102,9 +102,7 @@ def storage_upload(bucket, file_path, file_bytes, file_mime="image/jpeg"):
     res.raise_for_status()
     return f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{file_path}"
 
-# --- ВЫНЕСЕННАЯ ПОВТОРЯЮЩАЯСЯ ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ КАРТИНОК ---
 def upload_and_save_images(book_id, page_id, files):
-    """Загружает список файлов в Supabase Storage и сохраняет их ссылки в БД."""
     for idx, f in enumerate(files):
         file_path = f"book_{book_id}_page_{page_id}_{idx}_{f.name}"
         img_url = storage_upload("book-images", file_path, f.getvalue(), f.type)
@@ -261,7 +259,7 @@ if st.session_state.current_page > 1:
         p_title = page_item.get("title", "")
         p_text = page_item.get("text_content", "")
 
-# --- БОКОВАЯ ПАНЕЛЬ УЧЕБНИКА ---
+# --- БОКОВАЯ ПАНЕЛЬ С КНОПКАМИ ПО КЛАССАМ В СТОЛБИК ---
 with st.sidebar:
     if st.button("🔙 К выбору учебников", use_container_width=True, type="secondary"):
         st.session_state.selected_book_id = None
@@ -270,21 +268,30 @@ with st.sidebar:
         
     st.write("---")
     
-    # --- БЫСТРЫЙ ВЫБОР КЛАССА ---
-    st.subheader("🎯 Переход по классам")
-    available_grades = [f"{i} класс" for i in range(5, 12)]
-    selected_grade_filter = st.selectbox("Выберите класс:", ["Все классы"] + available_grades)
+    # --- БЛОК «ОТКРЫТЬ МАТЕРИАЛ» ПО КЛАССАМ (5-11 В СТОЛБИК) ---
+    st.subheader("📖 Открыть материал:")
     
-    if selected_grade_filter != "Все классы":
-        found_idx = next((i for i, p in enumerate(all_pages) if p.get("grade") == selected_grade_filter), None)
-        if found_idx is not None:
-            if st.button(f"Перейти к {selected_grade_filter}", type="primary", use_container_width=True):
-                st.session_state.current_page = found_idx + 2  # +2 из-за обложки
+    available_grades_list = [f"За {i} класс" for i in range(5, 12)]
+    
+    for grade_label in available_grades_list:
+        # Извлекаем название для базы данных, например: "5 класс" из "За 5 класс"
+        db_grade_name = grade_label.replace("За ", "")
+        
+        # Проверяем, есть ли хотя бы одна страница этого класса в учебнике
+        has_pages_for_grade = any(p.get("grade") == db_grade_name for p in all_pages)
+        
+        # Рисуем кнопку в столбик
+        if st.button(grade_label, key=f"sidebar_grade_btn_{db_grade_name}", use_container_width=True):
+            if has_pages_for_grade:
+                # Находим первую страницу этого класса
+                found_idx = next(i for i, p in enumerate(all_pages) if p.get("grade") == db_grade_name)
+                st.session_state.current_page = found_idx + 2  # +2 из-за обложки на 1 странице
                 st.rerun()
-        else:
-            st.caption(f"В этом учебнике нет тем для {selected_grade_filter}")
+            else:
+                st.toast(f"В этом учебнике пока нет материалов за {db_grade_name}!", icon="ℹ️")
 
     st.write("---")
+    
     if is_admin:
         st.success("🔓 Режим редактирования")
         if st.button("🚪 Выйти из аккаунта", use_container_width=True):
@@ -293,6 +300,7 @@ with st.sidebar:
             st.rerun()
             
         st.write("---")
+        available_grades = [f"{i} класс" for i in range(5, 12)]
         menu_mode = st.radio(
             "Действие:", 
             ["➕ Создать страницу", "✏️ Редактировать текущую"], 
@@ -390,7 +398,7 @@ if st.session_state.current_page == 1:
             <h1 style="text-shadow: 0px 2px 5px rgba(0,0,0,0.2);">📖 {current_book['title']}</h1>
             <p style="font-size: 1.2rem; opacity: 0.9; margin-top: 15px;">Онлайн-сборник теоретического материала</p>
             <div style="margin-top: 40px; font-weight: bold; background: rgba(255,255,255,0.25); padding: 10px 20px; border-radius: 30px; display: inline-block;">
-                Используйте боковое меню для выбора класса или листайте страницы 👇
+                Выберите нужный класс в боковом меню слева 👈
             </div>
         </div>
     """, unsafe_allow_html=True)
