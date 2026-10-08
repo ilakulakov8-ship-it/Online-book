@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+from google import genai
 
 # --- НАСТРОЙКА СТРАНИЦЫ И СТИЛЕЙ ---
 st.set_page_config(page_title="Онлайн-библиотека учебников", page_icon="📚", layout="wide")
@@ -45,9 +46,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- ПОДКЛЮЧЕНИЕ К SUPABASE ЧЕРЕЗ REST API ---
+# --- ПОДКЛЮЧЕНИЕ К SUPABASE И GEMINI ЧЕРЕЗ СЕКРЕТЫ ---
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("⚠️ Не найдены ключи Supabase в `st.secrets`! Проверьте настройки на Streamlit Cloud.")
@@ -59,6 +61,13 @@ HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "return=representation"
 }
+
+gemini_client = None
+if GEMINI_API_KEY:
+    try:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception:
+        pass
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДБ И СТОРАДЖА ---
 def db_get(table, query_params=""):
@@ -102,9 +111,7 @@ def storage_upload(bucket, file_path, file_bytes, file_mime="image/jpeg"):
     res.raise_for_status()
     return f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{file_path}"
 
-# --- ВЫНЕСЕННАЯ ПОВТОРЯЮЩАЯСЯ ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ КАРТИНОК ---
 def upload_and_save_images(book_id, page_id, files):
-    """Загружает список файлов в Supabase Storage и сохраняет их ссылки в БД."""
     for idx, f in enumerate(files):
         file_path = f"book_{book_id}_page_{page_id}_{idx}_{f.name}"
         img_url = storage_upload("book-images", file_path, f.getvalue(), f.type)
@@ -269,6 +276,25 @@ with st.sidebar:
         st.rerun()
         
     st.write("---")
+    
+    # --- БЫСТРЫЙ ВЫБОР КЛАССА ---
+    st.subheader("🎯 Выбрать класс")
+    available_grades = [f"{i} класс" for i in range(5, 12)]
+    
+    # Кнопки для быстрого переключения по классам
+    selected_grade_filter = st.selectbox("Фильтр по классам:", ["Все классы"] + available_grades)
+    
+    if selected_grade_filter != "Все классы":
+        # Находим первую страницу выбранного класса
+        found_idx = next((i for i, p in enumerate(all_pages) if p.get("grade") == selected_grade_filter), None)
+        if found_idx is not None:
+            if st.button(f"Перейти к {selected_grade_filter}", type="primary", use_container_width=True):
+                st.session_state.current_page = found_idx + 2  # +2 из-за обложки на 1 странице
+                st.rerun()
+        else:
+            st.caption(f"В этом учебнике пока нет тем для {selected_grade_filter}")
+
+    st.write("---")
     if is_admin:
         st.success("🔓 Режим редактирования")
         if st.button("🚪 Выйти из аккаунта", use_container_width=True):
@@ -287,7 +313,7 @@ with st.sidebar:
         if menu_mode == "➕ Создать страницу":
             st.subheader("➕ Новая страница")
             next_page_num = total_rules_pages + 2
-            grade = st.selectbox("Класс:", [f"{i} класс" for i in range(5, 12)])
+            grade = st.selectbox("Класс:", available_grades)
             rule_title = st.text_input("Название темы:")
             uploaded_files = st.file_uploader("Фото (необязательно):", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
             rule_text = st.text_area("Описание / Формулы:", height=200)
@@ -304,7 +330,6 @@ with st.sidebar:
                     
                     if insert_res and uploaded_files:
                         new_page_id = insert_res[0]["id"]
-                        # Использование вынесенной функции!
                         upload_and_save_images(current_book["id"], new_page_id, uploaded_files)
                             
                     st.success("Страница сохранена!")
@@ -314,10 +339,9 @@ with st.sidebar:
                     
         elif menu_mode == "✏️ Редактировать текущую" and current_page_id is not None:
             st.subheader(f"✏️ Правка стр. № {st.session_state.current_page}")
-            classes_list = [f"{i} класс" for i in range(5, 12)]
-            default_class_index = classes_list.index(p_grade) if p_grade in classes_list else 0
+            default_class_index = available_grades.index(p_grade) if p_grade in available_grades else 0
             
-            edit_grade = st.selectbox("Класс:", classes_list, index=default_class_index, key="edit_grade")
+            edit_grade = st.selectbox("Класс:", available_grades, index=default_class_index, key="edit_grade")
             edit_title = st.text_input("Тема:", value=p_title, key="edit_title")
             delete_old_photos = st.checkbox("🗑️ Заменить старые фото новыми", key="del_old_photos")
             edit_files = st.file_uploader("Добавить фото:", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="edit_files")
@@ -335,7 +359,6 @@ with st.sidebar:
                         pass
                 
                 if edit_files:
-                    # Использование вынесенной функции повторно!
                     upload_and_save_images(current_book["id"], current_page_id, edit_files)
                 
                 st.success("Изменения сохранены!")
@@ -377,7 +400,7 @@ if st.session_state.current_page == 1:
             <h1 style="text-shadow: 0px 2px 5px rgba(0,0,0,0.2);">📖 {current_book['title']}</h1>
             <p style="font-size: 1.2rem; opacity: 0.9; margin-top: 15px;">Онлайн-сборник теоретического материала</p>
             <div style="margin-top: 40px; font-weight: bold; background: rgba(255,255,255,0.25); padding: 10px 20px; border-radius: 30px; display: inline-block;">
-                Листайте страницы кнопками внизу страницы 👇
+                Используйте боковое меню для выбора класса или листайте страницы 👇
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -422,6 +445,46 @@ else:
             st.subheader("📌 Подзаголовок / Описание (формулы, правила):")
             st.markdown(f'<div class="book-text-content">{p_text}</div>', unsafe_allow_html=True)
                     
+        # --- ИИ-ПОМОЩНИК ---
+        st.write("---")
+        st.markdown("#### 🤖 Спросить у ИИ-помощника")
+        
+        ai_input_key = f"ai_query_{current_page_id}"
+        user_ai_question = st.text_input(
+            "Напишите что непонятно", 
+            placeholder="Напишите что непонятно (например: объясни эту формулу проще или как решать примеры)...", 
+            key=ai_input_key
+        )
+        
+        if st.button("Спросить у ИИ", key=f"ai_btn_{current_page_id}"):
+            if not user_ai_question.strip():
+                st.warning("Пожалуйста, введите вопрос!")
+            elif not gemini_client:
+                st.error("⚠️ Ключ GEMINI_API_KEY не настроен в секретах Streamlit!")
+            else:
+                with st.spinner("ИИ думает над ответом..."):
+                    try:
+                        prompt = f"""
+                        Ты дружелюбный ИИ-репетитор для школьника по предмету '{current_book['title']}'.
+                        Контекст текущей темы:
+                        Класс: {p_grade}
+                        Тема: {p_title}
+                        Текст правила/теории:
+                        {p_text}
+
+                        Вопрос ученика: {user_ai_question}
+
+                        Объясни понятным языком, приведи пример и ответь на вопрос на основе этой темы.
+                        """
+                        response = gemini_client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=prompt
+                        )
+                        st.success("Ответ ИИ:")
+                        st.write(response.text)
+                    except Exception as e:
+                        st.error(f"Произошла ошибка при обращении к ИИ: {e}")
+
         st.markdown('</div></div>', unsafe_allow_html=True)
 
 # --- НАВИГАЦИЯ ПО СТРАНИЦАМ ---
