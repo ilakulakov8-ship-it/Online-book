@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+from google import genai
 
 # --- НАСТРОЙКА СТРАНИЦЫ И СТИЛЕЙ ---
 st.set_page_config(page_title="Онлайн-библиотека учебников", page_icon="📚", layout="wide")
@@ -45,9 +46,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- ПОДКЛЮЧЕНИЕ К SUPABASE ЧЕРЕЗ REST API ---
+# --- ПОДКЛЮЧЕНИЕ К SUPABASE И GEMINI ЧЕРЕЗ СЕКРЕТЫ ---
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("⚠️ Не найдены ключи Supabase в `st.secrets`! Проверьте настройки на Streamlit Cloud.")
@@ -59,6 +61,14 @@ HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "return=representation"
 }
+
+# Инициализация клиента Gemini (если ключ указан)
+gemini_client = None
+if GEMINI_API_KEY:
+    try:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception:
+        pass
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДБ И СТОРАДЖА ---
 def db_get(table, query_params=""):
@@ -304,7 +314,6 @@ with st.sidebar:
                     
                     if insert_res and uploaded_files:
                         new_page_id = insert_res[0]["id"]
-                        # Использование вынесенной функции!
                         upload_and_save_images(current_book["id"], new_page_id, uploaded_files)
                             
                     st.success("Страница сохранена!")
@@ -335,7 +344,6 @@ with st.sidebar:
                         pass
                 
                 if edit_files:
-                    # Использование вынесенной функции повторно!
                     upload_and_save_images(current_book["id"], current_page_id, edit_files)
                 
                 st.success("Изменения сохранены!")
@@ -380,7 +388,7 @@ if st.session_state.current_page == 1:
                 Листайте страницы кнопками внизу страницы 👇
             </div>
         </div>
-    """, unsafe_allow_html=True)
+    """, unsafe_allow_html=Thread := None)
 else:
     if current_page_id is not None:
         images_records = []
@@ -422,6 +430,45 @@ else:
             st.subheader("📌 Подзаголовок / Описание (формулы, правила):")
             st.markdown(f'<div class="book-text-content">{p_text}</div>', unsafe_allow_html=True)
                     
+        # --- ВСТРОЕННЫЙ ИИ-ПОМОЩНИК ПОД КОНТЕНТОМ СТРАНИЦЫ ---
+        st.write("---")
+        st.markdown("#### 🤖 Спросить у ИИ-помощника")
+        
+        ai_input_key = f"ai_query_{current_page_id}"
+        user_ai_question = st.text_input(
+            "Напишите что непонятно", 
+            placeholder="Напишите что непонятно (например: объясни эту формулу проще или как решать примеры такого типа)...", 
+            key=ai_input_key
+        )
+        
+        if st.button("Спросить у ИИ", key=f"ai_btn_{current_page_id}"):
+            if not user_ai_question.strip():
+                st.warning("Пожалуйста, введите вопрос!")
+            elif not gemini_client:
+                st.error("⚠️ Ключ GEMINI_API_KEY не настроен в секретах Streamlit!")
+            else:
+                with st.spinner("ИИ думает над ответом..."):
+                    try:
+                        prompt = f"""
+                        Ты дружелюбный ИИ-репетитор и помощник для школьника по предмету '{current_book['title']}'.
+                        Контекст текущей темы на странице:
+                        Тема: {p_title}
+                        Текст правила/теории:
+                        {p_text}
+
+                        Вопрос ученика: {user_ai_question}
+
+                        Объясни понятным языком, приведи пример, если нужно, и ответь на вопрос школьника на основе этой темы.
+                        """
+                        response = gemini_client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=prompt
+                        )
+                        st.success("Ответ ИИ:")
+                        st.write(response.text)
+                    except Exception as e:
+                        st.error(f"Произошла ошибка при обращении к ИИ: {e}")
+
         st.markdown('</div></div>', unsafe_allow_html=True)
 
 # --- НАВИГАЦИЯ ПО СТРАНИЦАМ ---
