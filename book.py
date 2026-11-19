@@ -111,6 +111,13 @@ def upload_and_save_images(book_id, page_id, files):
             "image_url": img_url
         })
 
+# --- ПОРЯДОК СТРАНИЦ ПО КЛАССАМ ---
+def grade_sort_key(page):
+    grade_str = page.get("grade", "")
+    digits = "".join(ch for ch in grade_str if ch.isdigit())
+    grade_num = int(digits) if digits else 999
+    return (grade_num, page.get("id", 0))
+
 # --- СЕКРЕТНЫЙ ПАРОЛЬ АДМИНИСТРАТОРА ---
 ADMIN_PASSWORD = "$8157#@G05pl"
 
@@ -243,6 +250,8 @@ try:
     all_pages = db_get("pages", f"book_id=eq.{current_book['id']}&order=id.asc")
 except Exception:
     all_pages = []
+
+all_pages = sorted(all_pages, key=grade_sort_key)
 
 total_rules_pages = len(all_pages)
 max_pages = 1 + total_rules_pages
@@ -477,3 +486,4 @@ with nav_forward_cols[2]:
 with nav_forward_cols[3]:
     if st.button("Вперед +25 ⏭️", disabled=(st.session_state.current_page + 25 > max_pages), key="nav_f25"):
         st.session_state.current_page += 25; st.rerun()
+```[cite: 1]
