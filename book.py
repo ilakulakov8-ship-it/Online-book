@@ -486,4 +486,4 @@ with nav_forward_cols[2]:
 with nav_forward_cols[3]:
     if st.button("Вперед +25 ⏭️", disabled=(st.session_state.current_page + 25 > max_pages), key="nav_f25"):
         st.session_state.current_page += 25; st.rerun()
-```[cite: 1]
+
